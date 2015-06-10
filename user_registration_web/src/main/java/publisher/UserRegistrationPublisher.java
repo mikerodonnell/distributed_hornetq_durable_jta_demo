@@ -39,7 +39,7 @@ public class UserRegistrationPublisher {
 
 	private static final Logger LOGGER = Logger.getLogger(UserRegistrationPublisher.class);
 	private static final String PROPERTIES_FILE_NAME = "user_registration_publisher.properties";
-	private static final String DATASOURCE_JNDI_NAME = "java:jboss/datasources/user_database"; // see notes on @Resource lookup of dataSource
+	private static final String DATASOURCE_JNDI_NAME = "java:jboss/datasources/user_databaseXA"; // see notes on @Resource lookup of dataSource
 
 	private static ConnectionFactory connectionFactory;
 
@@ -48,7 +48,6 @@ public class UserRegistrationPublisher {
 	   always throws NameNotFoundException, even when it's a local, not remote, resource. this is a problem since we want the resource name
 	   to be loaded at runtime based from a properties file.
 	 */
-	// TODO: make this an XA datasource
 	@Resource( lookup=DATASOURCE_JNDI_NAME )
 	private static DataSource dataSource;
 
@@ -71,39 +70,76 @@ public class UserRegistrationPublisher {
 	 */
 	// this doesn't need to be static since the class is annotated @Singleton; static declaration can be removed if needed in the future. same for static members set here.
 	@PostConstruct // TODO: there doesn't seem to be a way to lazy-initialize without Spring. that would be preferable if possible.
-	public static void setUp() throws NamingException, JMSException, FileNotFoundException, IOException, SQLException {
+	public static void setUp() {
 		LOGGER.info("setting up now");
-
+		
+		if( loadProperties() ) {
+			jmsUsername = properties.getProperty("jms.username");
+			jmsPassword = properties.getProperty("jms.password");
+	
+			if( setUpJms() ) {
+				isSetupComplete = true;
+				LOGGER.info("setup completed successfully.");
+			}
+			else
+				LOGGER.error("Failed to get JMS resources, aborting setup.");
+		}
+		else
+			LOGGER.error("required properties were not loaded successfully, aborting setup.");
+		
+	}
+	
+	private static boolean loadProperties() {
+		boolean isPropertyLoadingComplete = false;
+		
 		String fileName = System.getProperty("jboss.server.config.dir") + "/" + PROPERTIES_FILE_NAME;
 		File propertiesFile = new File(fileName);
-		properties.load(new FileInputStream(propertiesFile));
-
-		jmsUsername = properties.getProperty("jms.username");
-		jmsPassword = properties.getProperty("jms.password");
-
+		try {
+			properties.load(new FileInputStream(propertiesFile));
+			isPropertyLoadingComplete = true;
+		}
+		catch (IOException ioException) {
+			LOGGER.error("caught exception loading properties from file: " + propertiesFile.getAbsolutePath() + ", returning success=false.", ioException);
+		}
+		
+		return isPropertyLoadingComplete;
+	}
+	
+	private static boolean setUpJms() {
+		boolean isJmsSetupComplete = false;
+		
 		Hashtable<String, String> environment = new Hashtable<String, String>();
 		environment.put(Context.PROVIDER_URL, properties.getProperty("provider.url"));
 		environment.put(Context.INITIAL_CONTEXT_FACTORY, properties.getProperty("initial.context.factory"));
 		environment.put(Context.SECURITY_PRINCIPAL, jmsUsername);
 		environment.put(Context.SECURITY_CREDENTIALS, jmsPassword);
-		Context namingContext = new InitialContext(environment);
-
-		String connectionFactoryString = properties.getProperty("default.connection.factory"); // ex: "jms/RemoteConnectionFactory"
-		connectionFactory = (ConnectionFactory) namingContext.lookup(connectionFactoryString);
-
-		userRegistrationTopicName = properties.getProperty("jms.topic.name");
-		userRegistrationTopic = (Topic) namingContext.lookup(userRegistrationTopicName);
-
-		if (namingContext != null) {
-			try {
-				namingContext.close();
-			} catch (NamingException namingException) {
-				LOGGER.error("Exception caught closing the publisher's Context: ", namingException);
+		Context namingContext = null;
+		try {
+			//namingContext = new InitialContext(environment); // revisit if there's a reason to do this ... using a "http-remoting" provider URL when instantiating the InitialContext seems problematic
+			namingContext = new InitialContext();
+			
+			String connectionFactoryString = properties.getProperty("default.connection.factory");
+			connectionFactory = (ConnectionFactory) namingContext.lookup(connectionFactoryString);
+			
+			userRegistrationTopicName = properties.getProperty("jms.topic.name");
+			userRegistrationTopic = (Topic) namingContext.lookup(userRegistrationTopicName);
+			
+			isJmsSetupComplete = true;
+		}
+		catch (NamingException namingException) {
+			LOGGER.error("caught NamingException attempting to find JMS topic in server's configuration: ", namingException);
+		}
+		finally {
+			if (namingContext != null) {
+				try {
+					namingContext.close();
+				} catch (NamingException namingException) {
+					LOGGER.error("NamingException caught closing the publisher's Context: ", namingException);
+				}
 			}
 		}
-
-		isSetupComplete = true;
-		LOGGER.info("setup complete");
+		
+		return isJmsSetupComplete;
 	}
 
 
@@ -114,12 +150,15 @@ public class UserRegistrationPublisher {
 	 * @param userGuid
 	 * @throws SQLException 
 	 */
+	// @Transactional(Transactional.TxType.MANDATORY) // TODO: we'll probably want this in place once UserRegistrationService#registerUser is refactored to contain the
+	// start point of the transaction.
 	public void publishForUserRegistrationEvent(final String userName, final String emailAddress, String password) {
 
 		if(isSetupComplete) {
 
 			LOGGER.info("Initialization of publishing requirements confirmed; adding user to DB now");
-
+			
+			// TODO: to demonstrate transactionality across multiple DB actions (even without JMS), break up insert into insert+update.
 			PreparedStatement preparedStatement = null;
 			Connection jdbcConnection = null;
 			try {
