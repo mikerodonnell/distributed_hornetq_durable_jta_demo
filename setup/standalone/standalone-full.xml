@@ -149,6 +149,29 @@
                         <password>sa</password>
                     </security>
                 </datasource>
+                <datasource jndi-name="java:jboss/datasources/user_database" pool-name="user_database" enabled="true" use-java-context="true">
+                    <connection-url>jdbc:mysql://localhost:3306/user_database</connection-url>
+                    <driver>mysql</driver>
+                    <security>
+                        <user-name>user_db_admin</user-name>
+                        <password>user_db_admin</password>
+                    </security>
+                </datasource>
+                <xa-datasource jndi-name="java:jboss/datasources/user_databaseXA" pool-name="user_databaseXA" enabled="true" use-java-context="true">
+                    <xa-datasource-property name="URL">
+                        jdbc:mysql://localhost:3306/user_database
+                    </xa-datasource-property>
+                    <driver>mysql</driver>
+                    <xa-pool>
+                        <min-pool-size>10</min-pool-size>
+                        <max-pool-size>20</max-pool-size>
+                        <prefill>true</prefill>
+                    </xa-pool>
+                    <security>
+                        <user-name>user_db_admin</user-name>
+                        <password>user_db_admin</password>
+                    </security>
+                </xa-datasource>
                 <drivers>
                     <driver name="h2" module="com.h2database.h2">
                         <xa-datasource-class>org.h2.jdbcx.JdbcDataSource</xa-datasource-class>
