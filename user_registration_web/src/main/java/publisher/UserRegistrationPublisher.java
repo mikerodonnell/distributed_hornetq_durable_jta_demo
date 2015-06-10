@@ -45,7 +45,7 @@ public class UserRegistrationPublisher {
 
 	/* although @Resource is the easiest way to load the DataSource, it also seems to be the only way. attempts to load manually like:
 	   dataSource = (DataSource) namingContext.lookup("java:jboss/datasources/user_database");
-	   always throws NameNotFoundExceptions, even when it's a local, not remote, resource. this is a problem since we want the resource name
+	   always throws NameNotFoundException, even when it's a local, not remote, resource. this is a problem since we want the resource name
 	   to be loaded at runtime based from a properties file.
 	 */
 	// TODO: make this an XA datasource
@@ -114,7 +114,7 @@ public class UserRegistrationPublisher {
 	 * @param userGuid
 	 * @throws SQLException 
 	 */
-	public void publishForUserRegistrationEvent(final String userName, final String emailAddress) throws SQLException {
+	public void publishForUserRegistrationEvent(final String userName, final String emailAddress, String password) {
 
 		if(isSetupComplete) {
 
@@ -124,7 +124,10 @@ public class UserRegistrationPublisher {
 			Connection jdbcConnection = null;
 			try {
 				jdbcConnection = dataSource.getConnection();
-				preparedStatement = jdbcConnection.prepareStatement("INSERT INTO users(user_name, email_address) VALUES ('" + userName + "', '" + emailAddress + "');");
+				preparedStatement = jdbcConnection.prepareStatement("INSERT INTO users(user_name, email_address, password) VALUES (?, ?, ?);");
+				preparedStatement.setString(1, userName);
+				preparedStatement.setString(2, emailAddress);
+				preparedStatement.setString(3, password);
 				preparedStatement.execute();
 				LOGGER.info("successfully executed insert, closing prepared statement now.");
 			}
@@ -132,11 +135,21 @@ public class UserRegistrationPublisher {
 				LOGGER.error("caught exception inserting user, attempting to safely close connection now. exception was: " + exception);
 			}
 			finally {
-				if( preparedStatement != null)
-					preparedStatement.close();
+				if( preparedStatement != null) {
+					try {
+						preparedStatement.close();
+					} catch (SQLException sqlException) {
+						LOGGER.error("caught SQLException attempting to close PreparedStatement, possible connection leak.", sqlException);
+					}
+				}
 
-				if( jdbcConnection != null)
-					jdbcConnection.close();
+				if( jdbcConnection != null) {
+					try {
+						jdbcConnection.close();
+					} catch (SQLException sqlException) {
+						LOGGER.error("caught SQLException attempting to close JDBC Connection, possible connection leak.", sqlException);
+					}
+				}
 			}
 
 			LOGGER.info("Initialization of publishing requirements confirmed; publishing to topic " + userRegistrationTopicName + " now");

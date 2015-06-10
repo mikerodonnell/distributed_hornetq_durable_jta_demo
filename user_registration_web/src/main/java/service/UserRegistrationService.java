@@ -1,8 +1,6 @@
 
 package service;
 
-import java.sql.SQLException;
-
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
@@ -21,17 +19,14 @@ public class UserRegistrationService {
 	private UserRegistrationPublisher userRegistrationPublisher;
 
 	/**
-	 * create a unique account for the given userName, and publish a notification to any interested subscribers.
+	 * create a unique account for the given user details, and publish a notification to any interested subscribers.
 	 * 
 	 * @param userName
 	 */
-	public void registerUser(final String userName, final String emailAddress) {
+	public void registerUser(final String userName, final String emailAddress, final String password) {
 
-		try {
-			userRegistrationPublisher.publishForUserRegistrationEvent(userName, emailAddress);
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
+		// TODO: once JTA transactionality is working, come back and do the DB save here...no reason to pass details like password to the publisher
+		userRegistrationPublisher.publishForUserRegistrationEvent(userName, emailAddress, password);
 		LOGGER.debug("registered user " + userName);
 	}
 

@@ -32,7 +32,8 @@ public class UserRegistrationServlet extends HttpServlet {
 
 		String userName = request.getParameter("userName");
 		String emailAddress = request.getParameter("emailAddress");
-		userRegistrationService.registerUser(userName, emailAddress);
+		String password = request.getParameter("password");
+		userRegistrationService.registerUser(userName, emailAddress, password);
 		PrintWriter writer = response.getWriter();
 		writer.println("request submitted to register user " + userName + ".");
 		writer.close();
