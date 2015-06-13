@@ -4,15 +4,12 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
 import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
 import javax.inject.Singleton;
 import javax.jms.JMSException;
 import javax.jms.JMSProducer;
@@ -22,7 +19,6 @@ import javax.jms.XAJMSContext;
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
-import javax.sql.DataSource;
 import javax.transaction.Transactional;
 
 import org.jboss.logging.Logger;
@@ -38,18 +34,8 @@ public class UserRegistrationPublisher {
 
 	private static final Logger LOGGER = Logger.getLogger(UserRegistrationPublisher.class);
 	private static final String PROPERTIES_FILE_NAME = "user_registration_publisher.properties";
-	private static final String DATASOURCE_JNDI_NAME = "java:jboss/datasources/user_databaseXA"; // see notes on @Resource lookup of dataSource
 
 	private static XAConnectionFactory connectionFactory;
-
-	/* although @Resource is the easiest way to load the DataSource, it also seems to be the only way. attempts to load manually like:
-	   dataSource = (DataSource) namingContext.lookup("java:jboss/datasources/user_database");
-	   always throws NameNotFoundException, even when it's a local, not remote, resource. this is a problem since we want the resource name
-	   to be loaded at runtime based from a properties file.
-	 */
-	@Resource( lookup=DATASOURCE_JNDI_NAME )
-	private static DataSource dataSource;
-
 	private static boolean isSetupComplete = false;
 	private static String userRegistrationTopicName;
 	private static Topic userRegistrationTopic;
@@ -68,7 +54,7 @@ public class UserRegistrationPublisher {
 	 * @throws SQLException 
 	 */
 	// this doesn't need to be static since the class is annotated @Singleton; static declaration can be removed if needed in the future. same for static members set here.
-	@PostConstruct // TODO: there doesn't seem to be a way to lazy-initialize without Spring. that would be preferable if possible.
+	@PostConstruct // there doesn't seem to be a way to lazy-initialize without Spring. that would be preferable if possible.
 	public static void setUp() {
 		LOGGER.info("setting up now");
 		
@@ -151,8 +137,8 @@ public class UserRegistrationPublisher {
 	 * @param userGuid
 	 * @throws SQLException 
 	 */
-	@Transactional(Transactional.TxType.MANDATORY) // TODO: we'll probably want this in place once UserRegistrationService#registerUser is refactored to contain the start point of the transaction.
-	public void publishForUserRegistrationEvent(final String userName, final String emailAddress, String password) throws SQLException {
+	@Transactional(Transactional.TxType.MANDATORY)
+	public void publishForUserRegistrationEvent(final String userName, final String emailAddress) throws SQLException {
 		
 		if(isSetupComplete) {
 
@@ -170,31 +156,6 @@ public class UserRegistrationPublisher {
 					jmsContext.close();
 			}
 
-			
-			LOGGER.info("Initialization of publishing requirements confirmed; adding user to DB now");
-			PreparedStatement preparedStatement = null;
-			Connection jdbcConnection = null;
-			try {
-				jdbcConnection = dataSource.getConnection();
-				preparedStatement = jdbcConnection.prepareStatement("INSERT INTO users(user_name, email_address, password) VALUES (?, ?, ?);");
-				preparedStatement.setString(1, userName);
-				preparedStatement.setString(2, emailAddress);
-				preparedStatement.setString(3, password);
-				preparedStatement.execute();
-				LOGGER.info("successfully executed insert, closing prepared statement now.");
-			}
-			catch(SQLException exception) {
-				LOGGER.error("caught exception inserting user, attempting to safely close connection now. exception was: " + exception);
-				throw exception;
-			}
-			finally {
-				if( preparedStatement != null)
-					preparedStatement.close();
-
-				if( jdbcConnection != null)
-					jdbcConnection.close();
-			}
-			
 		}
 		else
 			LOGGER.warn("no setup, skipping save and publish");
