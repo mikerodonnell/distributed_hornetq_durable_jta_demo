@@ -8,27 +8,26 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.HashMap;
-import java.util.Hashtable;
 import java.util.Map;
 import java.util.Properties;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import javax.inject.Singleton;
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSContext;
 import javax.jms.JMSException;
 import javax.jms.JMSProducer;
 import javax.jms.Topic;
+import javax.jms.XAConnectionFactory;
+import javax.jms.XAJMSContext;
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 import javax.sql.DataSource;
+import javax.transaction.Transactional;
 
 import org.jboss.logging.Logger;
 
 
-// TODO: should @Stateless be used?
 /**
  * a simple demo JMS publisher for demo of hornetQ publish-subscribe.
  * 
@@ -41,7 +40,7 @@ public class UserRegistrationPublisher {
 	private static final String PROPERTIES_FILE_NAME = "user_registration_publisher.properties";
 	private static final String DATASOURCE_JNDI_NAME = "java:jboss/datasources/user_databaseXA"; // see notes on @Resource lookup of dataSource
 
-	private static ConnectionFactory connectionFactory;
+	private static XAConnectionFactory connectionFactory;
 
 	/* although @Resource is the easiest way to load the DataSource, it also seems to be the only way. attempts to load manually like:
 	   dataSource = (DataSource) namingContext.lookup("java:jboss/datasources/user_database");
@@ -108,18 +107,20 @@ public class UserRegistrationPublisher {
 	private static boolean setUpJms() {
 		boolean isJmsSetupComplete = false;
 		
+		/*
 		Hashtable<String, String> environment = new Hashtable<String, String>();
 		environment.put(Context.PROVIDER_URL, properties.getProperty("provider.url"));
 		environment.put(Context.INITIAL_CONTEXT_FACTORY, properties.getProperty("initial.context.factory"));
 		environment.put(Context.SECURITY_PRINCIPAL, jmsUsername);
 		environment.put(Context.SECURITY_CREDENTIALS, jmsPassword);
+		Context namingContext = new InitialContext(environment); // revisit if there's a reason to do this ... using a "http-remoting" provider URL when instantiating the InitialContext seems problematic
+		*/
 		Context namingContext = null;
-		try {
-			//namingContext = new InitialContext(environment); // revisit if there's a reason to do this ... using a "http-remoting" provider URL when instantiating the InitialContext seems problematic
+		try { 
 			namingContext = new InitialContext();
 			
 			String connectionFactoryString = properties.getProperty("default.connection.factory");
-			connectionFactory = (ConnectionFactory) namingContext.lookup(connectionFactoryString);
+			connectionFactory = (XAConnectionFactory) namingContext.lookup(connectionFactoryString);
 			
 			userRegistrationTopicName = properties.getProperty("jms.topic.name");
 			userRegistrationTopic = (Topic) namingContext.lookup(userRegistrationTopicName);
@@ -150,15 +151,27 @@ public class UserRegistrationPublisher {
 	 * @param userGuid
 	 * @throws SQLException 
 	 */
-	// @Transactional(Transactional.TxType.MANDATORY) // TODO: we'll probably want this in place once UserRegistrationService#registerUser is refactored to contain the
-	// start point of the transaction.
-	public void publishForUserRegistrationEvent(final String userName, final String emailAddress, String password) {
-
+	@Transactional(Transactional.TxType.MANDATORY) // TODO: we'll probably want this in place once UserRegistrationService#registerUser is refactored to contain the start point of the transaction.
+	public void publishForUserRegistrationEvent(final String userName, final String emailAddress, String password) throws SQLException {
+		
 		if(isSetupComplete) {
 
-			LOGGER.info("Initialization of publishing requirements confirmed; adding user to DB now");
+			LOGGER.info("Initialization of publishing requirements confirmed; publishing to topic " + userRegistrationTopicName + " now");
+			XAJMSContext jmsContext = null;
+			try {
+				jmsContext = connectionFactory.createXAContext(jmsUsername, jmsPassword);
+				
+				JMSProducer producer = jmsContext.createProducer();
+				producer.send(userRegistrationTopic, constructNewUserRegistrationMessage(userName, emailAddress));
+				LOGGER.info("done publishing message");
+			}
+			finally {
+				if(jmsContext != null )
+					jmsContext.close();
+			}
+
 			
-			// TODO: to demonstrate transactionality across multiple DB actions (even without JMS), break up insert into insert+update.
+			LOGGER.info("Initialization of publishing requirements confirmed; adding user to DB now");
 			PreparedStatement preparedStatement = null;
 			Connection jdbcConnection = null;
 			try {
@@ -170,44 +183,22 @@ public class UserRegistrationPublisher {
 				preparedStatement.execute();
 				LOGGER.info("successfully executed insert, closing prepared statement now.");
 			}
-			catch(Exception exception) {
+			catch(SQLException exception) {
 				LOGGER.error("caught exception inserting user, attempting to safely close connection now. exception was: " + exception);
+				throw exception;
 			}
 			finally {
-				if( preparedStatement != null) {
-					try {
-						preparedStatement.close();
-					} catch (SQLException sqlException) {
-						LOGGER.error("caught SQLException attempting to close PreparedStatement, possible connection leak.", sqlException);
-					}
-				}
+				if( preparedStatement != null)
+					preparedStatement.close();
 
-				if( jdbcConnection != null) {
-					try {
-						jdbcConnection.close();
-					} catch (SQLException sqlException) {
-						LOGGER.error("caught SQLException attempting to close JDBC Connection, possible connection leak.", sqlException);
-					}
-				}
+				if( jdbcConnection != null)
+					jdbcConnection.close();
 			}
-
-			LOGGER.info("Initialization of publishing requirements confirmed; publishing to topic " + userRegistrationTopicName + " now");
-			JMSContext jmsContext = null;
-			try {
-				jmsContext = connectionFactory.createContext(jmsUsername, jmsPassword);
-				JMSProducer producer = jmsContext.createProducer();
-				producer.send(userRegistrationTopic, constructNewUserRegistrationMessage(userName, emailAddress));
-				LOGGER.info("done publishing message");
-			}
-			finally {
-				if(jmsContext != null )
-					jmsContext.close();
-			}
-
+			
 		}
 		else
 			LOGGER.warn("no setup, skipping save and publish");
-
+	
 	}
 
 
